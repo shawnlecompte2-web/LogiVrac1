@@ -1,0 +1,7 @@
+{
+  "name": " 2026-02-18 LV 3 ",
+  "description": "Une application professionnelle pour créer, signer et partager des billets de disposition directement depuis votre smartphone.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
