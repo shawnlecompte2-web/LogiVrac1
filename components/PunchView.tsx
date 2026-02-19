@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppSettings, PunchLog, UserAccount, BilletData } from '../types';
-import { Clock, ArrowLeft, LogIn, LogOut, Search, Truck, Activity, User as UserIcon, ClipboardList, ChevronDown, MapPin, Coffee, ArrowLeftRight, X, Briefcase, Plus, Trash2, Edit3, Check } from 'lucide-react';
+import { Clock, ArrowLeft, LogIn, LogOut, Search, Truck, Activity, User as UserIcon, MapPin, Coffee, ArrowLeftRight, X, Plus, Trash2, Edit3, Check, UserCircle, LayoutDashboard, RefreshCw } from 'lucide-react';
 
 interface Props {
   settings: AppSettings;
@@ -10,8 +9,8 @@ interface Props {
   onPunch: (log: PunchLog) => void;
   onBack: () => void;
   currentUser: UserAccount | null;
-  onAddProject: (project: string) => void;
-  onRemoveProject: (project: string) => void;
+  onAddProject: (type: 'provenances' | 'plaques', project: string) => void;
+  onRemoveProject: (type: 'provenances' | 'plaques', project: string) => void;
 }
 
 const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, currentUser, onAddProject, onRemoveProject }) => {
@@ -46,11 +45,16 @@ const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, 
   };
 
   const parseDate = (str: string) => {
-    const parts = str.trim().split(/\s+/);
+    if (!str) return 0;
+    const cleanTs = str.replace(',', '').trim();
+    const parts = cleanTs.split(/\s+/);
     if (parts.length < 2) return 0;
     const [d, m, y] = parts[0].split('/').map(Number);
-    const [h, min, s] = parts[1].split(':').map(Number);
-    return new Date(y, m - 1, d, h || 0, min || 0, s || 0).getTime();
+    const timeParts = parts[1].split(':').map(Number);
+    const hh = timeParts[0] || 0;
+    const mm = timeParts[1] || 0;
+    const ss = timeParts[2] || 0;
+    return new Date(y, m - 1, d, hh, mm, ss).getTime();
   };
 
   const punchableUsers = settings.users.filter(u => u.permissions.includes('punch'));
@@ -74,43 +78,6 @@ const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, 
     const lastIn = sorted.find(l => l.type === 'in');
     return lastIn?.plaque;
   }, [logs, selectedEmployee]);
-
-  const dailyProduction = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    
-    const userBillets = history.filter(b => {
-      const isToday = b.date === todayStr;
-      if (!isToday) return false;
-
-      if (isPlaqueRole && activePlaque) {
-        const bPlaque = (b.plaque === 'Autre' ? b.plaqueOther : b.plaque)?.trim().toUpperCase();
-        const aPlaque = activePlaque.trim().toUpperCase();
-        return bPlaque === aPlaque;
-      }
-      
-      return b.issuerName === selectedEmployee;
-    });
-    
-    const materials: Record<string, { tons: number; trips: number }> = {};
-    let totalTons = 0;
-
-    userBillets.forEach(b => {
-      const mat = b.typeSol === 'Autre' ? (b.typeSolOther || 'Autre') : (b.typeSol || 'Inconnu');
-      const tons = parseFloat(b.quantite === 'Autre' ? (b.quantiteOther || '0') : (b.quantite || '0')) || 0;
-      if (!materials[mat]) {
-        materials[mat] = { tons: 0, trips: 0 };
-      }
-      materials[mat].tons += tons;
-      materials[mat].trips += 1;
-      totalTons += tons;
-    });
-
-    return {
-      trips: userBillets.length,
-      totalTons,
-      materials
-    };
-  }, [history, selectedEmployee, isPlaqueRole, activePlaque]);
 
   const dailyWorkDuration = useMemo(() => {
     const todayStr = new Date().toLocaleDateString('fr-FR');
@@ -170,14 +137,12 @@ const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, 
   };
 
   const handleSwitchProject = () => {
-    if (!selectedEmployee || !plaque.trim() || isProcessing) return;
+    if (!selectedEmployee || isProcessing) return;
     setIsProcessing(true);
-    
+
     const now = new Date();
-    const nextSec = new Date(now.getTime() + 1000);
-    
     const outLog: PunchLog = {
-      id: `SWITCH-OUT-${Date.now()}`,
+      id: `OUT-SWITCH-${Date.now()}`,
       employeeName: selectedEmployee,
       type: 'out',
       timestamp: getTimestamp(now),
@@ -185,24 +150,25 @@ const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, 
     };
     onPunch(outLog);
 
-    const inLog: PunchLog = {
-      id: `SWITCH-IN-${Date.now() + 500}`,
-      employeeName: selectedEmployee,
-      type: 'in',
-      timestamp: getTimestamp(nextSec),
-      plaque: plaque,
-      isTransport: false
-    };
-    onPunch(inLog);
-
     setTimeout(() => {
-      setPlaque('');
-      setProjectSearch('');
+      const switchInTime = new Date();
+      const finalPlaque = workNature === 'transport' ? 'TRANSPORT' : plaque;
+      const inLog: PunchLog = {
+        id: `IN-SWITCH-${Date.now()}`,
+        employeeName: selectedEmployee,
+        type: 'in',
+        timestamp: getTimestamp(switchInTime),
+        plaque: finalPlaque,
+        isTransport: workNature === 'transport'
+      };
+      onPunch(inLog);
+      
       setIsSwitchingProject(false);
+      setProjectSearch('');
+      setPlaque('');
       setWorkNature('standard');
       setIsProcessing(false);
-      setIsEditingList(false);
-    }, 800);
+    }, 1000); // 1 seconde complète pour garantir un horodatage distinct
   };
 
   const availableProjects = useMemo(() => {
@@ -210,45 +176,65 @@ const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, 
     return list.filter(p => p.toLowerCase().includes(projectSearch.toLowerCase())).sort();
   }, [settings.plaques, settings.provenances, projectSearch, isPlaqueRole]);
 
+  const handleQuickAdd = () => {
+    if (!projectSearch.trim()) return;
+    const type = isPlaqueRole ? 'plaques' : 'provenances';
+    onAddProject(type, projectSearch.trim().toUpperCase());
+    setPlaque(projectSearch.trim().toUpperCase());
+    setProjectSearch(projectSearch.trim().toUpperCase());
+  };
+
+  const handleRemoveItem = (p: string) => {
+    const type = isPlaqueRole ? 'plaques' : 'provenances';
+    if (window.confirm(`Voulez-vous supprimer "${p}" de la liste globale ?`)) {
+        onRemoveProject(type, p);
+    }
+  };
+
   return (
-    <div className="space-y-6 animate-in fade-in duration-300 max-w-2xl mx-auto pb-20">
-      <div className="flex items-center justify-between">
-        <button onClick={onBack} className="flex items-center gap-1 text-black font-black uppercase text-[10px] bg-slate-200 px-3 py-1.5 rounded-lg active:scale-95 transition-transform">
+    <div className="space-y-4 animate-in fade-in duration-300 max-w-2xl mx-auto pb-20 px-2 sm:px-0">
+      <div className="flex justify-start">
+        <button onClick={onBack} className="flex items-center gap-1 text-black font-black uppercase text-[10px] bg-white px-3 py-1.5 rounded-lg border border-slate-200 active:scale-95 transition-transform shadow-sm">
           <ArrowLeft className="w-3 h-3" /> Retour
         </button>
-        <div className="text-right">
-          <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{currentTime.toLocaleDateString('fr-FR')}</div>
-          <div className="text-xl font-black text-black font-mono leading-none">{currentTime.toLocaleTimeString('fr-FR')}</div>
+      </div>
+
+      <div className="bg-gradient-to-br from-blue-600 to-blue-700 p-8 rounded-3xl shadow-xl border-b-8 border-blue-900 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+        <div className="flex items-center gap-4 relative z-10">
+          <div className="p-3 bg-white/10 rounded-2xl border border-white/20 backdrop-blur-sm">
+            <Clock className="w-8 h-8 text-white" />
+          </div>
+          <div>
+            <h2 className="text-3xl font-black uppercase italic tracking-tighter leading-none text-white">Pointage Mobile</h2>
+            <p className="text-[10px] font-black text-blue-200 uppercase tracking-widest mt-1">Gérez votre temps et vos projets</p>
+          </div>
         </div>
       </div>
 
-      <div className="bg-blue-600 p-6 rounded-3xl shadow-xl text-white border-b-4 border-black/20">
-        <Clock className="w-8 h-8 mb-2" />
-        <h2 className="text-2xl font-black uppercase italic tracking-tighter leading-none">Pointage Mobile</h2>
-        <p className="text-[9px] font-bold text-white/60 uppercase tracking-widest mt-1">Gérez votre temps et vos projets</p>
-      </div>
-
       {canSelectOthers && (
-        <div className="bg-white p-4 rounded-2xl border-2 border-slate-200 shadow-sm space-y-3">
-          <label className="text-[10px] font-black text-slate-400 uppercase ml-1 flex items-center gap-2">
-            <Search className="w-3 h-3" /> Rechercher un employé
-          </label>
-          <input
-            type="text"
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500 transition-all"
-            placeholder="Nom de l'employé..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {filteredEmployees.length > 0 && search && (
-            <div className="max-h-40 overflow-y-auto border border-slate-100 rounded-xl divide-y divide-slate-50 mt-2">
+        <div className="bg-white p-6 rounded-3xl border-2 border-slate-200 shadow-sm space-y-3">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block px-1">Rechercher un employé</label>
+          <div className="relative group">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 group-focus-within:text-blue-500 transition-colors" />
+            <input 
+              type="text" 
+              placeholder="Nom de l'employé" 
+              className="w-full pl-12 pr-4 py-4 rounded-2xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 outline-none font-bold text-sm uppercase transition-all"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          {search && filteredEmployees.length > 0 && (
+            <div className="bg-white border-2 border-slate-200 rounded-2xl overflow-hidden shadow-2xl max-h-60 overflow-y-auto animate-in slide-in-from-top-2">
               {filteredEmployees.map(u => (
-                <button
-                  key={u.id}
+                <button 
+                  key={u.id} 
                   onClick={() => { setSelectedEmployee(u.name); setSearch(''); }}
-                  className="w-full text-left px-4 py-2 text-xs font-bold hover:bg-slate-50 text-black uppercase"
+                  className="w-full px-5 py-4 text-left hover:bg-blue-50 border-b-2 border-slate-50 last:border-0 font-black text-xs uppercase flex items-center justify-between group"
                 >
-                  {u.name}
+                  <span className="text-slate-800 group-hover:text-blue-600 transition-colors">{u.name}</span>
+                  <span className="text-[8px] font-black bg-slate-100 text-slate-400 px-2 py-1 rounded uppercase">{u.role}</span>
                 </button>
               ))}
             </div>
@@ -256,230 +242,245 @@ const PunchView: React.FC<Props> = ({ settings, logs, history, onPunch, onBack, 
         </div>
       )}
 
-      <div className="bg-white p-6 rounded-3xl border-2 border-slate-200 shadow-sm space-y-6">
-        <div className="flex items-center gap-4 border-b border-slate-100 pb-4">
-          <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
-            <UserIcon className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase leading-none mb-1">Employé sélectionné</div>
-            <h3 className="text-lg font-black text-black uppercase italic">{selectedEmployee || 'Aucun'}</h3>
-            {punchingUser && <div className="text-[8px] font-bold text-[#76a73c] uppercase tracking-widest">{punchingUser.role.replace('_', ' ')} • {punchingUser.group}</div>}
+      <div className="bg-white p-6 rounded-[2.5rem] border-2 border-slate-200 shadow-md space-y-6">
+        <div className="flex justify-between items-center bg-slate-50/50 p-4 rounded-3xl border border-slate-100">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-white border-2 border-slate-100 flex items-center justify-center text-blue-500 shadow-sm">
+              <UserCircle className="w-8 h-8" />
+            </div>
+            <div>
+              <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Employé sélectionné</div>
+              <div className="text-xl font-black text-slate-900 uppercase italic tracking-tighter leading-none">{selectedEmployee || 'SÉLECTIONNEZ UN MEMBRE'}</div>
+              <div className="text-[8px] font-black text-[#76a73c] uppercase mt-1 tracking-widest">{role || '---'} • {punchingUser?.group || '---'}</div>
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 text-center">
-            <div className="text-[8px] font-black text-slate-400 uppercase mb-1">Statut actuel</div>
-            <div className={`text-xs font-black uppercase flex items-center justify-center gap-1.5 ${dailyWorkDuration.isActive ? 'text-[#76a73c]' : 'text-slate-400'}`}>
-              <div className={`w-2 h-2 rounded-full ${dailyWorkDuration.isActive ? 'bg-[#76a73c] animate-pulse' : 'bg-slate-300'}`}></div>
-              {dailyWorkDuration.isActive ? 'En poste' : 'Dépointé'}
+          <div className="bg-slate-50/80 p-5 rounded-[2rem] border border-slate-100 text-center flex flex-col justify-center">
+            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Statut actuel</div>
+            <div className={`flex items-center justify-center gap-2 text-xs font-black uppercase italic ${dailyWorkDuration.isActive ? 'text-[#76a73c]' : 'text-slate-500'}`}>
+               <div className={`w-2 h-2 rounded-full ${dailyWorkDuration.isActive ? 'bg-[#76a73c] animate-pulse' : 'bg-slate-300'}`}></div>
+               {dailyWorkDuration.isActive ? 'POINTÉ' : 'DÉPOINTÉ'}
             </div>
           </div>
-          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 text-center">
-            <div className="text-[8px] font-black text-slate-400 uppercase mb-1">Temps du jour</div>
-            <div className="text-sm font-black text-black font-mono">{dailyWorkDuration.formatted}</div>
+          <div className="bg-slate-50/80 p-5 rounded-[2rem] border border-slate-100 text-center flex flex-col justify-center">
+            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Temps du jour</div>
+            <div className={`text-xl font-black font-mono leading-none ${dailyWorkDuration.isActive ? 'text-blue-600' : 'text-slate-800'}`}>
+              {dailyWorkDuration.formatted}
+            </div>
           </div>
         </div>
 
-        {dailyWorkDuration.isActive && !isNoInputRole && (
-          <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 animate-in slide-in-from-top-2">
-            <div className="flex items-center gap-2 mb-2">
-              <Truck className="w-4 h-4 text-blue-600" />
-              <span className="text-[10px] font-black text-blue-600 uppercase">{isPlaqueRole ? 'Camion Actif' : 'Chantier Actif'}</span>
-            </div>
-            <div className="text-sm font-black text-blue-900 uppercase italic">{activePlaque || (isPlaqueRole ? 'Général' : 'Non spécifié')}</div>
-            {!isSwitchingProject && (
-              <button
-                onClick={() => setIsSwitchingProject(true)}
-                className="mt-3 flex items-center gap-1.5 text-[10px] font-black text-blue-600 uppercase hover:underline"
-              >
-                <ArrowLeftRight className="w-3.5 h-3.5" /> Changer de projet
-              </button>
+        {!dailyWorkDuration.isActive ? (
+          <div className="space-y-4 animate-in fade-in duration-500">
+            {showTransportOption && (
+              <div className="flex gap-2 p-1">
+                <button 
+                  onClick={() => setWorkNature('standard')}
+                  className={`flex-1 py-4 rounded-2xl text-[11px] font-black uppercase italic border-2 transition-all flex flex-col items-center justify-center gap-1 ${workNature === 'standard' ? 'bg-blue-600 border-blue-600 text-white shadow-lg scale-100' : 'bg-slate-50 border-slate-100 text-slate-400 scale-[0.98]'}`}
+                >
+                   STANDARD
+                </button>
+                <button 
+                  onClick={() => { setWorkNature('transport'); setPlaque(''); setProjectSearch(''); }}
+                  className={`flex-1 py-4 rounded-2xl text-[11px] font-black uppercase italic border-2 transition-all flex flex-col items-center justify-center gap-1 ${workNature === 'transport' ? 'bg-blue-600 border-blue-600 text-white shadow-lg scale-100' : 'bg-slate-50 border-slate-100 text-slate-400 scale-[0.98]'}`}
+                >
+                   TRANSPORT
+                </button>
+              </div>
             )}
-          </div>
-        )}
 
-        {(!dailyWorkDuration.isActive || isSwitchingProject) && (
-          <div className="space-y-4 animate-in slide-in-from-top-2">
-            {!isNoInputRole && (
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-black text-slate-400 uppercase ml-1">
-                    {isPlaqueRole ? 'Camion (Plaque)' : 'Chantier / Nature du travail'}
+            {!isNoInputRole && workNature === 'standard' && (
+              <div className="space-y-3 p-1 animate-in slide-in-from-top-2 duration-300">
+                <div className="flex justify-between items-end">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">
+                    {isPlaqueRole ? 'Camion / Plaque' : 'Chantier / Nature du travail'}
                   </label>
-                  {isAdmin && (
-                    <button 
-                      onClick={() => setIsEditingList(!isEditingList)}
-                      className={`flex items-center gap-1 px-2 py-1 rounded text-[9px] font-black uppercase transition-all ${isEditingList ? 'bg-black text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
-                    >
-                      {isEditingList ? <Check className="w-2.5 h-2.5" /> : <Edit3 className="w-2.5 h-2.5" />}
-                      {isEditingList ? 'Terminer' : 'Gérer la liste'}
-                    </button>
-                  )}
-                </div>
-
-                {/* Champ de recherche/saisie */}
-                <div className="relative">
-                  <div className="flex items-center bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-3 focus-within:border-blue-500 shadow-sm transition-all group">
-                    <Search className="w-4 h-4 text-slate-400 mr-3" />
-                    <input
-                      type="text"
-                      className="w-full bg-transparent text-sm font-black uppercase outline-none text-black"
-                      placeholder={isPlaqueRole ? "Entrer ou chercher plaque..." : "Entrer ou chercher chantier..."}
-                      value={projectSearch}
-                      onChange={(e) => {
-                        const val = e.target.value.toUpperCase();
-                        setProjectSearch(val);
-                        setPlaque(val); // Saisie libre par défaut
-                      }}
-                    />
-                    {projectSearch && (
-                      <button onClick={() => { setProjectSearch(''); setPlaque(''); }} className="text-slate-300 hover:text-slate-500">
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Grille de choix rapides modifiable */}
-                <div className="bg-slate-50 p-2 rounded-2xl border border-slate-100 max-h-52 overflow-y-auto">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {availableProjects.length === 0 && projectSearch ? (
-                      <button 
-                        onClick={() => {
-                          setPlaque(projectSearch);
-                        }}
-                        className="col-span-full py-4 rounded-xl border-2 border-dashed border-blue-200 text-blue-600 font-black text-[10px] uppercase flex items-center justify-center gap-2 hover:bg-blue-50 transition-all"
-                      >
-                        <Plus className="w-4 h-4" /> Utiliser "{projectSearch}" (Nouveau)
-                      </button>
-                    ) : (
-                      availableProjects.map(p => (
-                        <div key={p} className="relative group">
-                          <button
-                            type="button"
-                            onClick={() => { setPlaque(p); setProjectSearch(p); }}
-                            className={`w-full text-left px-3 py-3 rounded-xl border-2 transition-all uppercase text-[10px] font-black h-full flex items-center justify-between ${plaque === p ? 'bg-black text-white border-black shadow-md scale-[1.02]' : 'bg-white text-slate-600 border-slate-100 hover:border-slate-300'}`}
-                          >
-                            <span className="truncate mr-1">{p}</span>
-                            {plaque === p && <Check className="w-3 h-3 shrink-0" />}
-                          </button>
-                          {isEditingList && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if(window.confirm(`Supprimer "${p}" de la liste ?`)) onRemoveProject(p);
-                              }}
-                              className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-1 shadow-lg hover:scale-110 active:scale-90 transition-transform z-10"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {showTransportOption && !isSwitchingProject && (
-              <div className="flex bg-slate-100 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => { setWorkNature('standard'); setPlaque(''); setProjectSearch(''); }}
-                  className={`flex-1 py-2 text-[10px] font-black uppercase rounded-lg transition-all ${workNature === 'standard' ? 'bg-white text-black shadow-sm' : 'text-slate-400'}`}
-                >
-                  <Activity className="w-3.5 h-3.5 inline mr-1" /> Chantier
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setWorkNature('transport'); setPlaque('TRANSPORT'); setProjectSearch('TRANSPORT'); }}
-                  className={`flex-1 py-2 text-[10px] font-black uppercase rounded-lg transition-all ${workNature === 'transport' ? 'bg-[#76a73c] text-white shadow-sm' : 'text-slate-400'}`}
-                >
-                  <Truck className="w-3.5 h-3.5 inline mr-1" /> Transport
-                </button>
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              {isSwitchingProject && (
-                <button
-                  onClick={() => { setIsSwitchingProject(false); setPlaque(''); setProjectSearch(''); }}
-                  className="flex-1 py-4 bg-slate-200 text-slate-600 font-black uppercase italic rounded-2xl active:scale-95 transition-transform"
-                >
-                  Annuler
-                </button>
-              )}
-              <button
-                disabled={!selectedEmployee || (!isNoInputRole && !plaque.trim()) || isProcessing}
-                onClick={() => isSwitchingProject ? handleSwitchProject() : handlePunch('in')}
-                className={`flex-[2] py-4 bg-[#76a73c] text-white font-black uppercase italic rounded-2xl shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2 disabled:opacity-50 disabled:grayscale`}
-              >
-                <LogIn className="w-5 h-5" /> {isSwitchingProject ? 'Confirmer' : 'Pointer (In)'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {dailyWorkDuration.isActive && !isSwitchingProject && (
-          <div className="space-y-4 animate-in slide-in-from-top-2">
-            <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100">
-              <div className="flex items-center gap-2 mb-3">
-                <Coffee className="w-4 h-4 text-orange-500" />
-                <span className="text-[10px] font-black text-orange-700 uppercase">Temps de dîner</span>
-              </div>
-              <div className="grid grid-cols-5 gap-2">
-                {[0, 15, 30, 45, 60].map(m => (
-                  <button
-                    key={m}
-                    onClick={() => setLunchMinutes(m)}
-                    className={`py-2 rounded-xl text-[10px] font-black transition-all ${lunchMinutes === m ? 'bg-orange-500 text-white shadow-md' : 'bg-white text-slate-400 border border-slate-200'}`}
+                  <button 
+                    onClick={() => setIsEditingList(!isEditingList)}
+                    className="flex items-center gap-1.5 text-[10px] font-black text-blue-600 uppercase italic bg-blue-50 px-3 py-1.5 rounded-full border border-blue-100 hover:bg-blue-100 active:scale-95 transition-all"
                   >
-                    {m} min
+                    <Edit3 className="w-3 h-3" /> {isEditingList ? 'Fermer' : 'Gérer la liste'}
                   </button>
-                ))}
+                </div>
+                
+                <div className="flex gap-2 relative">
+                  <div className="relative flex-1 group">
+                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 group-focus-within:text-blue-500" />
+                      <input 
+                        type="text" 
+                        placeholder={isPlaqueRole ? "Entrez ou cherchez un camion..." : "Entrer ou chercher chantier"}
+                        className="w-full pl-11 pr-4 py-4 rounded-2xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 outline-none font-bold text-sm uppercase transition-all"
+                        value={projectSearch}
+                        onChange={(e) => { setProjectSearch(e.target.value); setPlaque(e.target.value); }}
+                      />
+                  </div>
+                  <button 
+                    onClick={handleQuickAdd}
+                    disabled={!projectSearch.trim()}
+                    className="p-4 bg-blue-600 text-white rounded-2xl shadow-lg active:scale-90 disabled:opacity-50 transition-all"
+                    title="Ajouter à la liste"
+                  >
+                    <Plus className="w-6 h-6" />
+                  </button>
+                </div>
+
+                {isEditingList ? (
+                  <div className="bg-slate-900 rounded-3xl p-5 space-y-3 animate-in slide-in-from-top-4 duration-300 border-b-4 border-blue-600">
+                    <div className="text-[9px] font-black text-[#76a73c] uppercase tracking-widest flex items-center gap-2 mb-2">
+                        <Edit3 className="w-3 h-3" /> Modification de la liste globale
+                    </div>
+                    <div className="grid gap-2 max-h-48 overflow-y-auto p-1 custom-scrollbar">
+                        {availableProjects.map(p => (
+                          <div key={p} className="flex items-center justify-between bg-white/10 p-3 rounded-xl group border border-white/5">
+                            <span className="text-xs font-black text-white uppercase">{p}</span>
+                            <button onClick={() => handleRemoveItem(p)} className="p-1.5 text-red-400 hover:text-red-500 transition-colors">
+                                <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {availableProjects.slice(0, 12).map(p => (
+                        <button 
+                          key={p} 
+                          onClick={() => { setPlaque(p); setProjectSearch(p); }}
+                          className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase border-2 transition-all active:scale-95 flex items-center gap-2 ${plaque === p ? 'bg-blue-600 border-blue-600 text-white shadow-xl' : 'bg-white border-slate-200 text-slate-600 hover:border-blue-400 shadow-sm'}`}
+                        >
+                          <MapPin className={`w-3 h-3 ${plaque === p ? 'text-blue-200' : 'text-blue-500'}`} />
+                          {p}
+                        </button>
+                    ))}
+                  </div>
+                )}
               </div>
+            )}
+
+            {workNature === 'transport' && (
+              <div className="bg-blue-50 p-6 rounded-3xl border-2 border-dashed border-blue-200 flex flex-col items-center justify-center text-center space-y-2 animate-in zoom-in-95 duration-300">
+                <Truck className="w-10 h-10 text-blue-500" />
+                <div>
+                  <p className="text-sm font-black text-blue-800 uppercase italic">Mode Transport Sélectionné</p>
+                  <p className="text-[9px] font-bold text-blue-400 uppercase">Le segment sera automatiquement approuvé comme transport général.</p>
+                </div>
+              </div>
+            )}
+
+            <button 
+              disabled={!selectedEmployee || (!isNoInputRole && workNature === 'standard' && !plaque.trim()) || isProcessing}
+              onClick={() => handlePunch('in')}
+              className="w-full py-6 bg-[#b2d392] text-white font-black uppercase italic text-2xl rounded-3xl shadow-[0_10px_30px_rgba(178,211,146,0.3)] hover:brightness-105 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50 disabled:grayscale border-b-8 border-[#76a73c]"
+            >
+              <LogIn className="w-8 h-8" /> Pointer (In)
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-500">
+            <div className="bg-blue-50 p-6 rounded-[2.5rem] border-2 border-blue-100 space-y-4">
+              <div className="flex items-center justify-between">
+                 <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-blue-600 shadow-sm">
+                      <MapPin className="w-6 h-6" />
+                    </div>
+                    <div>
+                       <div className="text-[9px] font-black text-blue-400 uppercase tracking-widest leading-none mb-1">Segment actif sur</div>
+                       <div className="text-lg font-black text-blue-800 uppercase italic tracking-tighter leading-none">{activePlaque || 'GÉNÉRAL'}</div>
+                    </div>
+                 </div>
+                 <button 
+                   onClick={() => setIsSwitchingProject(!isSwitchingProject)}
+                   className={`p-3 rounded-xl border-2 transition-all active:scale-95 flex items-center gap-2 ${isSwitchingProject ? 'bg-black text-white border-black' : 'bg-white text-blue-600 border-blue-200'}`}
+                 >
+                   <RefreshCw className={`w-4 h-4 ${isSwitchingProject ? 'animate-spin' : ''}`} />
+                   <span className="text-[9px] font-black uppercase">{isSwitchingProject ? 'Annuler' : 'Changer'}</span>
+                 </button>
+              </div>
+
+              {isSwitchingProject && (
+                <div className="pt-4 border-t border-blue-200 space-y-4 animate-in slide-in-from-top-4 duration-300">
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setWorkNature('standard')}
+                      className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${workNature === 'standard' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-blue-100 text-blue-300'}`}
+                    >
+                      CHANTIER
+                    </button>
+                    <button 
+                      onClick={() => { setWorkNature('transport'); setPlaque(''); setProjectSearch(''); }}
+                      className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${workNature === 'transport' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-blue-100 text-blue-300'}`}
+                    >
+                      TRANSPORT
+                    </button>
+                  </div>
+
+                  {workNature === 'standard' && (
+                    <div className="space-y-3">
+                      <div className="relative group">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-300" />
+                        <input 
+                          type="text" 
+                          placeholder="Chercher nouveau projet..."
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-blue-100 bg-white outline-none font-bold text-xs uppercase"
+                          value={projectSearch}
+                          onChange={(e) => { setProjectSearch(e.target.value); setPlaque(e.target.value); }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {availableProjects.slice(0, 8).map(p => (
+                          <button 
+                            key={p} 
+                            onClick={() => { setPlaque(p); setProjectSearch(p); }}
+                            className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${plaque === p ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-blue-50 text-blue-400'}`}
+                          >
+                            {p}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button 
+                    disabled={workNature === 'standard' && !plaque.trim()}
+                    onClick={handleSwitchProject}
+                    className="w-full py-4 bg-blue-600 text-white font-black uppercase italic rounded-2xl shadow-lg active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Check className="w-4 h-4" /> Confirmer le changement
+                  </button>
+                </div>
+              )}
             </div>
 
-            <button
-              disabled={isProcessing}
-              onClick={() => handlePunch('out')}
-              className="w-full py-4 bg-red-500 text-white font-black uppercase italic rounded-2xl shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
-            >
-              <LogOut className="w-5 h-5" /> Dépointer (Out)
-            </button>
+            <div className="grid grid-cols-1 gap-4">
+                <div className="bg-slate-50 p-5 rounded-[2.5rem] border-2 border-slate-100 space-y-3">
+                   <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase italic px-1">
+                     <Coffee className="w-4 h-4 text-orange-500" /> Temps de dîner à déduire
+                   </div>
+                   <div className="grid grid-cols-5 gap-2">
+                     {[0, 15, 30, 45, 60].map(m => (
+                       <button key={m} onClick={() => setLunchMinutes(m)} className={`py-3 rounded-2xl text-xs font-black border-2 transition-all active:scale-95 ${lunchMinutes === m ? 'bg-black text-orange-500 border-black shadow-lg' : 'bg-white text-slate-400 border-slate-200 hover:border-orange-200'}`}>
+                         {m}m
+                       </button>
+                     ))}
+                   </div>
+                </div>
+
+                <button 
+                  onClick={() => handlePunch('out')}
+                  className="w-full py-6 bg-red-500 text-white font-black uppercase italic text-2xl rounded-3xl shadow-[0_10px_30px_rgba(239,68,68,0.3)] hover:bg-red-600 transition-all active:scale-95 flex items-center justify-center gap-3 border-b-8 border-red-900"
+                >
+                  <LogOut className="w-8 h-8" /> Dépointer (Out)
+                </button>
+            </div>
           </div>
         )}
       </div>
 
-      {dailyProduction.trips > 0 && (
-        <div className="bg-white p-6 rounded-3xl border-2 border-slate-200 shadow-sm space-y-4 animate-in slide-in-from-bottom-2">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
-            <ClipboardList className="w-4 h-4 text-[#76a73c]" />
-            <span className="text-[10px] font-black text-slate-400 uppercase italic">Productivité du jour</span>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-slate-50 p-3 rounded-2xl text-center">
-              <div className="text-[8px] font-black text-slate-300 uppercase mb-1">Voyages</div>
-              <div className="text-xl font-black text-black">{dailyProduction.trips}</div>
-            </div>
-            <div className="bg-slate-50 p-3 rounded-2xl text-center">
-              <div className="text-[8px] font-black text-slate-300 uppercase mb-1">Tonnage</div>
-              <div className="text-xl font-black text-[#76a73c]">{Math.round(dailyProduction.totalTons)} T</div>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {Object.entries(dailyProduction.materials).map(([mat, data]: [string, any]) => (
-              <div key={mat} className="flex justify-between items-center text-[10px] font-bold uppercase bg-slate-50 p-2 rounded-lg">
-                <span className="text-slate-600 truncate mr-2">{mat}</span>
-                <span className="text-black shrink-0">{data.trips} v. / {Math.round(data.tons)} T</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="text-center opacity-30 mt-8">
+         <p className="text-[8px] font-black uppercase tracking-[0.5em] text-slate-800">Logivrac Logistique Mobile</p>
+      </div>
     </div>
   );
 };

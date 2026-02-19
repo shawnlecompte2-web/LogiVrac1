@@ -1,6 +1,6 @@
 
 import React, { useMemo, useState } from 'react';
-import { PunchLog, UserAccount, BilletData, ApprovalRecord } from '../types';
+import { PunchLog, UserAccount, BilletData, ApprovalRecord, UserRole } from '../types';
 import { Clock, Calendar, User, ChevronRight, Timer, History, LogIn, LogOut, ShieldCheck, ArrowLeft, ArrowRight, Truck, Layers, CalendarRange, Users, Briefcase, Printer, FileText, MapPin, HardHat, Construction, Trash2 } from 'lucide-react';
 
 interface Props {
@@ -27,26 +27,38 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
     if (parts.length < 2) return 0;
     
     const [datePart, timePart] = parts;
-    const dateComponents = datePart.split('/');
-    if (dateComponents.length < 3) return 0;
-    
-    const [day, month, year] = dateComponents.map(Number);
+    let d, m, y;
+    if (datePart.includes('/')) {
+      const dateComponents = datePart.split('/');
+      [d, m, y] = dateComponents.map(Number);
+    } else {
+      const dateComponents = datePart.split('-');
+      [y, m, d] = dateComponents.map(Number);
+    }
+
     const timeParts = timePart.split(':').map(Number);
     const hour = timeParts[0] || 0;
     const min = timeParts[1] || 0;
     const sec = timeParts[2] || 0;
     
-    return new Date(year, month - 1, day, hour, min, sec).getTime();
+    return new Date(y, m - 1, d, hour, min, sec).getTime();
   };
 
   const getSundayKey = (timestamp: string) => {
     const cleanTs = timestamp.replace(',', '').trim();
     const [datePart] = cleanTs.split(/\s+/);
-    const [day, month, year] = datePart.split('/').map(Number);
-    const d = new Date(year, month - 1, day, 12, 0, 0);
-    const dayOfWeek = d.getDay();
-    const diff = d.getDate() - dayOfWeek;
-    const sunday = new Date(d.setDate(diff));
+    let d, m, y;
+    if (datePart.includes('/')) {
+        const components = datePart.split('/');
+        [d, m, y] = components.map(Number);
+    } else {
+        const components = datePart.split('-');
+        [y, m, d] = components.map(Number);
+    }
+    const dateObj = new Date(y, m - 1, d, 12, 0, 0);
+    const dayOfWeek = dateObj.getDay();
+    const diff = dateObj.getDate() - dayOfWeek;
+    const sunday = new Date(dateObj.setDate(diff));
     return sunday.toISOString().split('T')[0];
   };
 
@@ -67,7 +79,6 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
   };
 
   const processedData = useMemo(() => {
-    // Tri par temps, sorties avant entrées en cas de simultanéité
     const sortedLogs = [...logs].sort((a, b) => {
       const timeA = parseTimestamp(a.timestamp);
       const timeB = parseTimestamp(b.timestamp);
@@ -78,7 +89,7 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
     });
 
     const weeklyMap: Record<string, any> = {};
-    const openPunches: Record<string, { ms: number, id: string, project?: string }> = {};
+    const openPunch: Record<string, { ms: number, id: string, project?: string, dateKey: string }> = {};
 
     sortedLogs.forEach(log => {
       const employee = log.employeeName;
@@ -88,7 +99,6 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
       const timestamp = log.timestamp;
       const weekKey = getSundayKey(timestamp);
       const dateMapKey = timestamp.split(/[ ,]+/)[0];
-      const timeStr = timestamp.split(/[ ,]+/)[1]?.slice(0, 5) || "--:--";
       const ms = parseTimestamp(timestamp);
 
       if (!weeklyMap[weekKey]) weeklyMap[weekKey] = { totalMs: 0, groups: {} };
@@ -103,35 +113,51 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
       }
 
       if (log.type === 'in') {
-        if (openPunches[employee]) {
-          const prev = openPunches[employee];
-          const duration = ms - prev.ms;
-          const prevSession = empData.days[dateMapKey].sessions.find((s: any) => s.inId === prev.id && s.out === null);
-          if (prevSession) {
-            prevSession.out = timeStr;
-            prevSession.duration = duration;
-          }
+        if (openPunch[employee]) {
+           const prev = openPunch[employee];
+           const prevDay = empData.days[prev.dateKey];
+           const sessionToClose = prevDay.sessions.find((s: any) => s.inId === prev.id && s.out === null);
+           if (sessionToClose) {
+              sessionToClose.out = timestamp.split(/[ ,]+/)[1]?.slice(0, 5) || "--:--";
+              sessionToClose.duration = ms - prev.ms;
+           }
         }
-        openPunches[employee] = { ms, id: log.id, project: log.plaque };
-        empData.days[dateMapKey].sessions.push({ in: timeStr, out: null, project: log.plaque, inMs: ms, inId: log.id, outId: null });
+        
+        const timeStr = timestamp.split(/[ ,]+/)[1]?.slice(0, 5) || "--:--";
+        const newSession = { 
+          in: timeStr, 
+          out: null, 
+          project: log.plaque, 
+          inMs: ms, 
+          inId: log.id, 
+          outId: null,
+          duration: null,
+          isApproved: false
+        };
+        empData.days[dateMapKey].sessions.push(newSession);
+        openPunch[employee] = { ms, id: log.id, project: log.plaque, dateKey: dateMapKey };
       } 
       else if (log.type === 'out') {
-        if (openPunches[employee]) {
-          const duration = ms - openPunches[employee].ms;
-          if (log.lunchMinutes) empData.days[dateMapKey].lunchMins = log.lunchMinutes;
-
-          const currentSession = empData.days[dateMapKey].sessions.find((s: any) => s.inId === openPunches[employee].id && s.out === null);
-          if (currentSession) {
-            currentSession.out = timeStr;
-            currentSession.duration = duration;
-            currentSession.outId = log.id;
+        if (log.lunchMinutes) empData.days[dateMapKey].lunchMins = log.lunchMinutes;
+        
+        if (openPunch[employee]) {
+          const lastIn = openPunch[employee];
+          const duration = ms - lastIn.ms;
+          
+          const sessionDay = empData.days[lastIn.dateKey];
+          if (sessionDay) {
+              const session = sessionDay.sessions.find((s: any) => s.inId === lastIn.id && s.out === null);
+              if (session) {
+                session.out = timestamp.split(/[ ,]+/)[1]?.slice(0, 5) || "--:--";
+                session.duration = duration;
+                session.outId = log.id;
+              }
           }
-          delete openPunches[employee];
+          delete openPunch[employee];
         }
       }
     });
 
-    // Validation des sessions et calcul des totaux
     Object.keys(weeklyMap).forEach(wk => {
       Object.keys(weeklyMap[wk].groups).forEach(grp => {
         Object.keys(weeklyMap[wk].groups[grp].employees).forEach(emp => {
@@ -140,27 +166,31 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
 
           Object.keys(e.days).forEach(dKey => {
             const day = e.days[dKey];
-            const parts = dKey.split('/');
-            const isoDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
             let dayTotalMs = 0;
 
             day.sessions.forEach((s: any) => {
-              const project = s.project || "NON SPÉCIFIÉ";
-              const isChauffeur = e.role === 'chauffeur';
-              // On vérifie spécifiquement l'approbation de ce projet
-              const approval = approvals.find(a => a.employeeName === emp && a.date === isoDate && a.project === project && a.status === 'approved');
+              // Defined constant for auto-approval roles, correctly typed with UserRole.
+              const AUTO_APPROVE_ROLES: UserRole[] = ['chauffeur', 'gestionnaire_chauffeur', 'admin', 'surintendant', 'chargée_de_projet'];
+              const isAutoApproved = AUTO_APPROVE_ROLES.includes(e.role);
               
-              if (isChauffeur || approval) {
+              const approval = approvals.find(a => a.sessionInId === s.inId && a.sessionOutId === s.outId);
+              
+              if (approval) {
                 s.isApproved = true;
-                if (s.duration) {
-                   dayTotalMs += s.duration;
-                }
+                s.duration = approval.totalMs;
+                dayTotalMs += approval.totalMs;
+                const inLog = logs.find(l => l.id === s.inId);
+                const outLog = logs.find(l => l.id === s.outId);
+                if (inLog) s.in = inLog.timestamp.split(/[ ,]+/)[1]?.slice(0, 5);
+                if (outLog) s.out = outLog.timestamp.split(/[ ,]+/)[1]?.slice(0, 5);
+              } else if (isAutoApproved) {
+                s.isApproved = true;
+                if (s.duration) dayTotalMs += s.duration;
               } else {
                 s.isApproved = false;
               }
             });
 
-            // On déduit le dîner seulement si on a des sessions approuvées
             const finalDayNet = Math.max(0, dayTotalMs - (day.lunchMins * 60000));
             day.total = finalDayNet;
             weeklyApprovedTotal += finalDayNet;
@@ -226,7 +256,7 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
               </div>
               <div className="text-left">
                 <h3 className="text-2xl font-black text-black uppercase italic leading-none tracking-tight">DDL Logistiques</h3>
-                <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Division Transport</p>
+                <p className="text-[10px] font-bold text-[#76a73c] uppercase mt-2">Division Transport</p>
               </div>
             </div>
             <ChevronRight className="w-6 h-6 text-slate-200 group-hover:text-black" />
@@ -394,7 +424,7 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
                                <span className="text-[9px] font-black text-blue-700 uppercase">{session.project || 'GÉNÉRAL'}</span>
                             </div>
                             <div className="flex items-center gap-2">
-                                {!session.isApproved && empData.role !== 'chauffeur' && <span className="text-[7px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full uppercase">En attente</span>}
+                                {!session.isApproved && <span className="text-[7px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full uppercase">En attente</span>}
                                 <div className="text-[9px] font-black text-slate-400 font-mono italic">
                                    {session.duration ? formatMs(session.duration) : 'Session Active'}
                                 </div>
@@ -428,102 +458,101 @@ const PunchReportView: React.FC<Props> = ({ logs, users, history, approvals, onB
           </div>
         </div>
 
-        {/* VERSION IMPRESSION PDF ÉLARGIE POUR US LETTER */}
-        <div className="hidden print:block p-0 bg-white text-black font-sans min-h-screen text-[10px] leading-tight w-full">
-          <div className="flex justify-between items-end border-b-8 border-black pb-4 mb-6">
+        <div className="hidden print:block p-0 bg-white text-black font-sans print:w-full print:h-[26.5cm] print:max-h-[26.5cm] text-[10px] leading-tight w-full overflow-hidden flex flex-col">
+          <div className="flex justify-between items-end border-b-8 border-black pb-4 mb-4">
             <div>
-              <h1 className="text-4xl font-black italic tracking-tighter leading-none text-black">
+              <h1 className="text-3xl font-black italic tracking-tighter leading-none text-black">
                 GROUPE <span className="text-[#76a73c]">DDL</span>
               </h1>
-              <p className="text-[11px] font-black uppercase tracking-[0.4em] mt-2 text-slate-400">FEUILLE DE TEMPS • LOGISTIQUE</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.3em] mt-1 text-slate-400">FEUILLE DE TEMPS • LOGISTIQUE</p>
             </div>
             <div className="text-right">
-              <div className="bg-black text-white px-6 py-2 mb-2 inline-block">
-                <h2 className="text-xl font-black uppercase italic tracking-widest leading-none">RAPPORT DE PAIE</h2>
+              <div className="bg-black text-white px-4 py-1.5 mb-1 inline-block">
+                <h2 className="text-lg font-black uppercase italic tracking-widest leading-none">RAPPORT DE PAIE</h2>
               </div>
-              <p className="text-sm font-black uppercase text-slate-500">Document généré électroniquement • Format US Letter</p>
+              <p className="text-[8px] font-black uppercase text-slate-500">Document généré électroniquement • Format US Letter</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-0 border-4 border-black mb-8">
-            <div className="p-6 border-r-4 border-black">
-               <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">IDENTIFICATION DE L'EMPLOYÉ</span>
-               <div className="text-4xl font-black uppercase italic tracking-tight">{selectedEmployee}</div>
-               <div className="text-sm font-bold text-[#76a73c] uppercase mt-2">{selectedGroup} • {empData.role}</div>
+          <div className="grid grid-cols-2 gap-0 border-4 border-black mb-4 shrink-0">
+            <div className="p-4 border-r-4 border-black">
+               <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest block mb-0.5">IDENTIFICATION DE L'EMPLOYÉ</span>
+               <div className="text-3xl font-black uppercase italic tracking-tight">{selectedEmployee}</div>
+               <div className="text-xs font-bold text-[#76a73c] uppercase mt-1">{selectedGroup} • {empData.role}</div>
             </div>
-            <div className="bg-slate-50 p-6 flex flex-col justify-center items-end">
-               <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">TOTAL CUMULÉ NET (APPROUVÉ)</span>
-               <div className="flex items-baseline gap-4">
-                  <div className="text-5xl font-black text-black font-mono leading-none tracking-tighter">{formatMs(empData.totalMs)}</div>
-                  <div className="text-2xl font-black text-slate-300 uppercase">H. NET</div>
+            <div className="bg-slate-50 p-4 flex flex-col justify-center items-end">
+               <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest block mb-0.5">TOTAL CUMULÉ NET (APPROUVÉ)</span>
+               <div className="flex items-baseline gap-3">
+                  <div className="text-4xl font-black text-black font-mono leading-none tracking-tighter">{formatMs(empData.totalMs)}</div>
+                  <div className="text-xl font-black text-slate-300 uppercase">H. NET</div>
                </div>
-               <div className="text-sm font-black text-slate-400 uppercase mt-2">
+               <div className="text-[10px] font-black text-slate-400 uppercase mt-1">
                   Période du rapport : {formatWeekRange(selectedWeek)}
                </div>
             </div>
           </div>
 
-          <table className="w-full border-collapse text-[11px]">
-            <thead>
-              <tr className="bg-black text-white">
-                <th className="p-3 text-left uppercase border-r border-white/20 font-black">DATE / JOURNÉE</th>
-                <th className="p-3 text-center uppercase border-r border-white/20 font-black">ENTRÉE</th>
-                <th className="p-3 text-center uppercase border-r border-white/20 font-black">SORTIE</th>
-                <th className="p-3 text-center uppercase border-r border-white/20 font-black">DÎNER</th>
-                <th className="p-3 text-left uppercase border-r border-white/20 font-black">PROJET / CHANTIER</th>
-                <th className="p-3 text-right uppercase font-black">CUMUL NET</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {daysKeys.map((dateStr, dIdx) => {
-                const day = empData.days[dateStr];
-                // On n'affiche que les sessions approuvées dans le PDF de paie officiel
-                const approvedSessions = day.sessions.filter((s: any) => s.isApproved || empData.role === 'chauffeur');
-                
-                return approvedSessions.map((session: any, sIdx: number) => (
-                  <tr key={`${dateStr}-${sIdx}`} className={`${sIdx === 0 && dIdx > 0 ? 'border-t-4 border-black/10' : ''} hover:bg-slate-50`}>
-                    <td className="p-3 font-black uppercase italic text-sm">{sIdx === 0 ? dateStr : ''}</td>
-                    <td className="p-3 text-center font-mono font-bold text-sm">{session.in}</td>
-                    <td className="p-3 text-center font-mono font-bold text-sm">{session.out || '--:--'}</td>
-                    <td className="p-3 text-center text-orange-600 font-black text-sm">
-                       {sIdx === 0 ? (day.lunchMins > 0 ? `${day.lunchMins}m` : '0m') : ''}
-                    </td>
-                    <td className="p-3 uppercase text-black font-black text-xs truncate max-w-[220px]">
-                      {session.project || 'GÉNÉRAL / DIVERS'}
-                    </td>
-                    <td className="p-3 text-right font-black font-mono bg-slate-50 text-base">
-                       {session.duration ? formatMs(session.duration) : '--:--'}
-                    </td>
-                  </tr>
-                ));
-              })}
-            </tbody>
-          </table>
+          <div className="flex-1 overflow-hidden">
+            <table className="w-full border-collapse text-[10px]">
+              <thead>
+                <tr className="bg-black text-white">
+                  <th className="p-2 text-left uppercase border-r border-white/20 font-black">DATE / JOURNÉE</th>
+                  <th className="p-2 text-center uppercase border-r border-white/20 font-black">ENTRÉE</th>
+                  <th className="p-2 text-center uppercase border-r border-white/20 font-black">SORTIE</th>
+                  <th className="p-2 text-center uppercase border-r border-white/20 font-black">DÎNER</th>
+                  <th className="p-2 text-left uppercase border-r border-white/20 font-black">PROJET / CHANTIER</th>
+                  <th className="p-2 text-right uppercase font-black">CUMUL NET</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {daysKeys.map((dateStr, dIdx) => {
+                  const day = empData.days[dateStr];
+                  const approvedSessions = day.sessions.filter((s: any) => s.isApproved);
+                  
+                  return approvedSessions.map((session: any, sIdx: number) => (
+                    <tr key={`${dateStr}-${sIdx}`} className={`${sIdx === 0 && dIdx > 0 ? 'border-t-2 border-black/10' : ''} hover:bg-slate-50`}>
+                      <td className="p-1.5 font-black uppercase italic text-[11px]">{sIdx === 0 ? dateStr : ''}</td>
+                      <td className="p-1.5 text-center font-mono font-bold text-[11px]">{session.in}</td>
+                      <td className="p-1.5 text-center font-mono font-bold text-[11px]">{session.out || '--:--'}</td>
+                      <td className="p-1.5 text-center text-orange-600 font-black text-[11px]">
+                         {sIdx === 0 ? (day.lunchMins > 0 ? `${day.lunchMins}m` : '0m') : ''}
+                      </td>
+                      <td className="p-1.5 uppercase text-black font-black text-[10px] truncate max-w-[200px]">
+                        {session.project || 'GÉNÉRAL / DIVERS'}
+                      </td>
+                      <td className="p-1.5 text-right font-black font-mono bg-slate-50 text-[12px]">
+                         {session.duration ? formatMs(session.duration) : '--:--'}
+                      </td>
+                    </tr>
+                  ));
+                })}
+              </tbody>
+            </table>
+          </div>
 
-          {/* RÉCAPITULATIF BAS DE PAGE */}
-          <div className="mt-12 p-8 bg-slate-900 text-white flex justify-between items-center rounded-sm">
-             <div className="text-[11px] font-black uppercase tracking-[0.4em] text-[#76a73c]">SYNTHÈSE DE PAIE HEBDOMADAIRE</div>
-             <div className="flex gap-16">
-                <div className="text-right border-l-2 border-white/20 pl-16">
-                   <div className="text-xs font-black uppercase text-[#76a73c] mb-1">NET TOTAL À PAYER</div>
-                   <div className="text-4xl font-black font-mono leading-none tracking-tighter">{formatMs(empData.totalMs)}</div>
+          <div className="mt-4 p-4 bg-slate-900 text-white flex justify-between items-center rounded-sm shrink-0">
+             <div className="text-[10px] font-black uppercase tracking-[0.3em] text-[#76a73c]">SYNTHÈSE DE PAIE HEBDOMADAIRE</div>
+             <div className="flex gap-10">
+                <div className="text-right border-l-2 border-white/20 pl-10">
+                   <div className="text-[10px] font-black uppercase text-[#76a73c] mb-0.5">NET TOTAL À PAYER</div>
+                   <div className="text-3xl font-black font-mono leading-none tracking-tighter">{formatMs(empData.totalMs)}</div>
                 </div>
              </div>
           </div>
 
-          <div className="mt-20 grid grid-cols-2 gap-40">
+          <div className="mt-8 grid grid-cols-2 gap-32 shrink-0">
              <div className="flex flex-col">
-               <div className="h-16 border-b-2 border-black"></div>
-               <div className="mt-2 text-[10px] font-black uppercase text-slate-400 tracking-[0.3em]">SIGNATURE DE L'EMPLOYÉ</div>
+               <div className="h-12 border-b-2 border-black"></div>
+               <div className="mt-1.5 text-[9px] font-black uppercase text-slate-400 tracking-[0.2em]">SIGNATURE DE L'EMPLOYÉ</div>
              </div>
              <div className="flex flex-col text-right">
-               <div className="h-16 border-b-2 border-black"></div>
-               <div className="mt-2 text-[10px] font-black uppercase text-slate-400 tracking-[0.3em]">VALIDATION DIRECTION</div>
+               <div className="h-12 border-b-2 border-black"></div>
+               <div className="mt-1.5 text-[9px] font-black uppercase text-slate-400 tracking-[0.2em]">VALIDATION DIRECTION</div>
              </div>
           </div>
 
-          <div className="mt-12 text-center pt-8 border-t border-slate-100">
-             <p className="text-[8px] font-black text-slate-300 uppercase tracking-[0.5em]">LOGIVRAC • GROUPE DDL EXCAVATION INC.</p>
+          <div className="mt-auto text-center pt-4 border-t border-slate-100 shrink-0">
+             <p className="text-[8px] font-black text-slate-300 uppercase tracking-[0.4em]">LOGIVRAC • GROUPE DDL EXCAVATION INC.</p>
           </div>
         </div>
 

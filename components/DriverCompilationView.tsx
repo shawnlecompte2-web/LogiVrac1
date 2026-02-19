@@ -21,10 +21,8 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
 
   const chauffeurs = useMemo(() => users.filter(u => u.role === 'chauffeur' || u.role === 'gestionnaire_chauffeur').sort((a, b) => a.name.localeCompare(b.name)), [users]);
 
-  // Transforme une date ISO (YYYY-MM-DD) ou FR (DD/MM/YYYY) en objet Date à midi
   const toDate = (dateStr: string) => {
     if (!dateStr) return new Date();
-    // Nettoyage si c'est un timestamp complet
     const cleanDate = dateStr.split(/[ ,]+/)[0];
     if (cleanDate.includes('-')) {
       const [y, m, d] = cleanDate.split('-').map(Number);
@@ -67,14 +65,11 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
     return new Date(year, month - 1, day, hh, mm).getTime();
   };
 
-  // Traitement robuste des données
   const driverData = useMemo(() => {
     if (!selectedDriver) return {};
     
     const weeks: Record<string, any> = {};
     const driverName = selectedDriver.name.trim();
-
-    // On prépare les sources de données pour ce chauffeur
     const driverPunches = logs.filter(l => (l.employeeName || "").trim() === driverName);
     const driverApprovals = approvals.filter(a => (a.employeeName || "").trim() === driverName);
 
@@ -86,7 +81,6 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
       return weeks[wk].days[dayIso];
     };
 
-    // 1. D'abord, on traite les pointages pour créer les journées et identifier les camions utilisés
     const plaquesByDay: Record<string, Set<string>> = {};
     driverPunches.forEach(p => {
       const datePart = p.timestamp.split(/[ ,]+/)[0];
@@ -101,8 +95,6 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
       }
     });
 
-    // 2. Ensuite, on traite TOUS les billets de l'historique pour trouver ceux qui appartiennent au chauffeur
-    // Un billet appartient au chauffeur s'il en est l'émetteur OU si la plaque correspond au camion qu'il utilisait ce jour-là
     history.forEach(b => {
       const isIssuer = (b.issuerName || "").trim() === driverName;
       const bPlaqueNormalized = (b.plaque === 'Autre' ? b.plaqueOther : b.plaque)?.trim().toUpperCase();
@@ -112,7 +104,6 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
         const wk = getSundayKey(b.date);
         const day = initDay(wk, b.date);
         
-        // Eviter d'ajouter deux fois le même billet (si issuer et truck matchent par ex)
         if (!day.tickets.find((t: any) => t.id === b.id)) {
           day.tickets.push(b);
           const mat = b.typeSol === 'Autre' ? (b.typeSolOther || 'Autre') : (b.typeSol || 'Inconnu');
@@ -125,12 +116,10 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
       }
     });
 
-    // 3. Enfin, on ajoute les informations d'heures approuvées
     driverApprovals.forEach(app => {
       const wk = getSundayKey(app.date);
       const day = initDay(wk, app.date);
       
-      // Récupérer Arrivée/Départ pour ce jour
       const dateParts = app.date.split('-');
       const dateStrSlash = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
       const dayLogs = driverPunches
@@ -265,7 +254,6 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
                     </div>
                     
                     <div className="p-6 space-y-6">
-                       {/* Section Heures */}
                        {day.hours ? (
                           <div className="grid grid-cols-3 gap-3">
                              <div className="bg-slate-100 p-3 rounded-2xl text-center">
@@ -287,7 +275,6 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
                          </div>
                        )}
 
-                       {/* Résumé Production */}
                        <div className="space-y-4">
                           <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
                              <Layers className="w-4 h-4 text-[#76a73c]" />
@@ -316,7 +303,6 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
                           </div>
                        </div>
 
-                       {/* Liste des Billets */}
                        <div className="space-y-3">
                           <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
                              <FileText className="w-4 h-4 text-blue-500" />
@@ -349,50 +335,48 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
           </div>
         </div>
 
-        {/* VERSION IMPRESSION PDF ÉLARGIE POUR US LETTER */}
-        <div className="hidden print:block p-0 bg-white text-black font-sans min-h-screen text-[10px] leading-tight w-full">
-          {/* HEADER CONDENSÉ MAIS ÉLARGI */}
-          <div className="flex justify-between items-end border-b-8 border-black pb-4 mb-6">
+        {/* VERSION IMPRESSION PDF ÉLARGIE POUR US LETTER - OPTIMISÉE POUR UNE SEULE PAGE */}
+        <div className="hidden print:block p-0 bg-white text-black font-sans print:w-full print:h-[26.5cm] print:max-h-[26.5cm] text-[10px] leading-tight w-full overflow-hidden flex flex-col">
+          <div className="flex justify-between items-end border-b-8 border-black pb-4 mb-4">
             <div>
-              <h1 className="text-4xl font-black italic tracking-tighter leading-none text-black">
+              <h1 className="text-3xl font-black italic tracking-tighter leading-none text-black">
                 GROUPE <span className="text-[#76a73c]">DDL</span>
               </h1>
-              <p className="text-[10px] font-black uppercase tracking-[0.4em] mt-2 text-slate-500">
+              <p className="text-[9px] font-black uppercase tracking-[0.4em] mt-1 text-slate-500">
                 COMPILATION LOGISTIQUE CHAUFFEUR
               </p>
             </div>
             <div className="text-right">
-              <div className="bg-black text-white px-6 py-2 inline-block mb-2">
-                <h2 className="text-xl font-black uppercase italic tracking-widest leading-none">
+              <div className="bg-black text-white px-4 py-1 inline-block mb-1">
+                <h2 className="text-lg font-black uppercase italic tracking-widest leading-none">
                   {dayToPrint ? "RAPPORT JOURNALIER" : "RAPPORT HEBDOMADAIRE"}
                 </h2>
               </div>
-              <p className="text-sm font-black uppercase text-slate-400">
+              <p className="text-[10px] font-black uppercase text-slate-400">
                 {dayToPrint ? dayToPrint : formatWeekRange(selectedWeek)}
               </p>
             </div>
           </div>
 
-          {/* FICHE IDENTITÉ & RÉSUMÉ */}
-          <div className="grid grid-cols-2 gap-0 border-4 border-black mb-8">
-            <div className="p-6 border-r-4 border-black">
-               <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">IDENTIFICATION CHAUFFEUR</span>
-               <div className="text-3xl font-black uppercase italic tracking-tight">{selectedDriver.name}</div>
-               <div className="text-sm font-bold text-[#76a73c] uppercase mt-2">
+          <div className="grid grid-cols-2 gap-0 border-4 border-black mb-4 shrink-0">
+            <div className="p-4 border-r-4 border-black">
+               <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest block mb-0.5">IDENTIFICATION CHAUFFEUR</span>
+               <div className="text-2xl font-black uppercase italic tracking-tight">{selectedDriver.name}</div>
+               <div className="text-xs font-bold text-[#76a73c] uppercase mt-1">
                  {selectedDriver.group} • CODE PIN: {selectedDriver.code}
                </div>
             </div>
-            <div className="bg-slate-50 p-6 flex flex-col justify-center items-end">
-               <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">PRODUCTIVITÉ PÉRIODE</span>
-               <div className="flex items-baseline gap-4">
-                  <div className="text-4xl font-black text-black font-mono leading-none tracking-tighter">
+            <div className="bg-slate-50 p-4 flex flex-col justify-center items-end">
+               <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest block mb-0.5">PRODUCTIVITÉ PÉRIODE</span>
+               <div className="flex items-baseline gap-3">
+                  <div className="text-3xl font-black text-black font-mono leading-none tracking-tighter">
                      {formatMs(Object.values(days)
                         .filter((_, i) => !dayToPrint || Object.keys(days)[i] === dayToPrint)
                         .reduce((acc: number, d: any) => acc + (Number(d.hours?.totalNet) || 0), 0) as number)}
                   </div>
                   <div className="text-xl font-black text-slate-300 uppercase">HEURES NET</div>
                </div>
-               <div className="text-sm font-black text-[#76a73c] uppercase mt-2">
+               <div className="text-xs font-black text-[#76a73c] uppercase mt-1">
                   TONNAGE TOTAL : {(Object.values(days)
                     .filter((_, i) => !dayToPrint || Object.keys(days)[i] === dayToPrint)
                     .reduce((acc: number, d: any) => acc + (Object.values(d.prod || {}).reduce((ta: number, cur: any) => ta + (Number(cur.tons) || 0), 0) as number), 0) as number).toLocaleString()} T
@@ -400,73 +384,72 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
             </div>
           </div>
 
-          {/* DÉTAIL DES JOURNÉES */}
-          <div className="space-y-8">
+          <div className="space-y-4 flex-1 overflow-hidden">
             {sortedDays
               .filter(date => !dayToPrint || date === dayToPrint)
               .map(date => {
                 const day = days[date];
                 return (
-                  <div key={date} className="page-break-inside-avoid border-t-2 border-slate-100 pt-4">
-                     <div className="bg-slate-50 px-6 py-2 flex items-center justify-between mb-4 border-l-8 border-black">
-                        <h3 className="text-xl font-black uppercase italic tracking-tight">{date}</h3>
+                  <div key={date} className="page-break-inside-avoid border-t border-slate-200 pt-2">
+                     <div className="bg-slate-50 px-4 py-1.5 flex items-center justify-between mb-2 border-l-4 border-black">
+                        <h3 className="text-base font-black uppercase italic tracking-tight">{date}</h3>
                         {day.hours && (
-                          <div className="flex gap-8 text-[11px] font-black uppercase tracking-widest text-black">
+                          <div className="flex gap-6 text-[10px] font-black uppercase tracking-widest text-black">
                             <span className="text-[#76a73c]">ARRIVÉE: {day.hours.arrival}</span>
                             <span className="text-red-500">DÉPART: {day.hours.departure}</span>
-                            <span className="bg-black text-white px-3 py-1 rounded-sm">TOTAL: {formatMs(day.hours.totalNet)}</span>
+                            <span className="bg-black text-white px-2 py-0.5 rounded-sm">TOTAL: {formatMs(day.hours.totalNet)}</span>
                           </div>
                         )}
                      </div>
 
-                     <div className="grid grid-cols-2 gap-12">
-                        <div className="border-r-2 border-slate-100 pr-6">
-                          <table className="w-full text-[11px]">
+                     <div className="grid grid-cols-2 gap-8">
+                        <div className="border-r border-slate-100 pr-4">
+                          <table className="w-full text-[10px]">
                             <thead>
-                              <tr className="border-b-4 border-black">
-                                <th className="text-left py-2 uppercase font-black">MATÉRIAU</th>
-                                <th className="text-center py-2 uppercase font-black">VOYAGES</th>
-                                <th className="text-right py-2 uppercase font-black">TONNAGE</th>
+                              <tr className="border-b-2 border-black">
+                                <th className="text-left py-1 uppercase font-black">MATÉRIAU</th>
+                                <th className="text-center py-1 uppercase font-black">VOYAGES</th>
+                                <th className="text-right py-1 uppercase font-black">TONNAGE</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                               {Object.entries(day.prod).length > 0 ? (
                                 Object.entries(day.prod).map(([mat, d]: [string, any]) => (
-                                  <tr key={mat} className="hover:bg-slate-50">
-                                    <td className="py-3 uppercase font-bold truncate max-w-[150px]">{mat}</td>
-                                    <td className="py-3 text-center font-black text-lg">{d.trips}</td>
-                                    <td className="py-3 text-right font-black text-lg text-[#76a73c]">{d.tons.toLocaleString()} T</td>
+                                  <tr key={mat}>
+                                    <td className="py-1.5 uppercase font-bold truncate max-w-[120px]">{mat}</td>
+                                    <td className="py-1.5 text-center font-black text-sm">{d.trips}</td>
+                                    <td className="py-1.5 text-right font-black text-sm text-[#76a73c]">{d.tons.toLocaleString()} T</td>
                                   </tr>
                                 ))
                               ) : (
-                                <tr><td colSpan={3} className="text-center py-6 text-slate-300 italic font-black">AUCUNE ACTIVITÉ</td></tr>
+                                <tr><td colSpan={3} className="text-center py-4 text-slate-300 italic font-black">AUCUNE ACTIVITÉ</td></tr>
                               )}
                             </tbody>
                           </table>
                         </div>
 
                         <div>
-                          <table className="w-full text-[10px]">
+                          <table className="w-full text-[9px]">
                              <thead>
-                               <tr className="border-b-4 border-black">
-                                 <th className="text-left py-2 uppercase font-black">BILLET #</th>
-                                 <th className="text-left py-2 uppercase font-black">HEURE</th>
-                                 <th className="text-left py-2 uppercase font-black">PROVENANCE</th>
-                                 <th className="text-right py-2 uppercase font-black">TONS</th>
+                               <tr className="border-b-2 border-black">
+                                 <th className="text-left py-1 uppercase font-black">BILLET #</th>
+                                 <th className="text-left py-1 uppercase font-black">HEURE</th>
+                                 <th className="text-left py-1 uppercase font-black">PROVENANCE</th>
+                                 <th className="text-right py-1 uppercase font-black">TONS</th>
                                </tr>
                              </thead>
                              <tbody className="divide-y divide-slate-100">
                                {day.tickets.length > 0 ? (
                                  day.tickets.map((t: BilletData) => (
                                    <tr key={t.id}>
-                                     <td className="py-2 font-mono text-[#76a73c] font-black">{t.id.split('-').pop()}</td>
-                                     <td className="py-2 text-slate-400 font-bold">{t.time}</td>
-                                     <td className="py-2 uppercase font-bold truncate max-w-[120px]">{t.provenance}</td>
-                                     <td className="py-2 text-right font-black text-sm">{t.quantite === 'Autre' ? t.quantiteOther : t.quantite} T</td>
+                                     <td className="py-1 font-mono text-[#76a73c] font-black">{t.id.split('-').pop()}</td>
+                                     <td className="py-1 text-slate-400 font-bold">{t.time}</td>
+                                     <td className="py-1 uppercase font-bold truncate max-w-[100px]">{t.provenance}</td>
+                                     <td className="py-1 text-right font-black text-[10px]">{t.quantite === 'Autre' ? t.quantiteOther : t.quantite} T</td>
                                    </tr>
                                  ))
                                ) : (
-                                 <tr><td colSpan={4} className="text-center py-4 text-slate-300 italic font-bold">AUCUN BILLET GÉNÉRÉ</td></tr>
+                                 <tr><td colSpan={4} className="text-center py-2 text-slate-300 italic font-bold">AUCUN BILLET GÉNÉRÉ</td></tr>
                                )}
                              </tbody>
                           </table>
@@ -477,16 +460,19 @@ const DriverCompilationView: React.FC<Props> = ({ logs, users, history, approval
             })}
           </div>
 
-          {/* SIGNATURES ÉLARGIES */}
-          <div className="mt-20 pt-8 border-t-4 border-black flex justify-between gap-40">
+          <div className="mt-6 pt-4 border-t-4 border-black flex justify-between gap-32 shrink-0">
              <div className="flex-1">
-               <div className="h-20 border-b-2 border-black"></div>
-               <div className="mt-2 text-[10px] font-black uppercase text-slate-400 tracking-[0.3em]">SIGNATURE DU CHAUFFEUR</div>
+               <div className="h-10 border-b border-black"></div>
+               <div className="mt-1 text-[8px] font-black uppercase text-slate-400 tracking-[0.2em]">SIGNATURE DU CHAUFFEUR</div>
              </div>
              <div className="flex-1 text-right">
-               <div className="h-20 border-b-2 border-black"></div>
-               <div className="mt-2 text-[10px] font-black uppercase text-slate-400 tracking-[0.3em]">VALIDATION DIRECTION</div>
+               <div className="h-10 border-b border-black"></div>
+               <div className="mt-1 text-[8px] font-black uppercase text-slate-400 tracking-[0.2em]">VALIDATION DIRECTION</div>
              </div>
+          </div>
+          
+          <div className="mt-auto pt-2 border-t border-slate-100 text-center shrink-0">
+             <p className="text-[7px] font-black text-slate-300 uppercase tracking-[0.4em]">LOGIVRAC • GROUPE DDL EXCAVATION INC.</p>
           </div>
         </div>
 

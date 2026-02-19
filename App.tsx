@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { BilletData, ViewMode, AppSettings, PunchLog, UserAccount, Permission, ApprovalRecord, UserRole } from './types';
 import BilletForm from './components/BilletForm';
@@ -99,6 +98,30 @@ const App: React.FC = () => {
     };
   }
 
+  // Utilitaire unifié pour le parsing des dates avec secondes (supporte DD/MM/YYYY et YYYY-MM-DD)
+  const parseTimestamp = (ts: string) => {
+    if (!ts) return 0;
+    const cleanTs = ts.replace(',', '').trim();
+    const parts = cleanTs.split(/\s+/);
+    if (parts.length < 2) return 0;
+    const [datePart, timePart] = parts;
+    
+    let d, m, y;
+    if (datePart.includes('/')) {
+      const components = datePart.split('/');
+      [d, m, y] = components.map(Number);
+    } else {
+      const components = datePart.split('-');
+      [y, m, d] = components.map(Number);
+    }
+
+    const timeComponents = timePart.split(':').map(Number);
+    const hh = timeComponents[0] || 0;
+    const mm = timeComponents[1] || 0;
+    const ss = timeComponents[2] || 0;
+    return new Date(y, m - 1, d, hh, mm, ss).getTime();
+  };
+
   useEffect(() => {
     const savedSettings = localStorage.getItem('ecovrac_settings');
     if (savedSettings) {
@@ -125,13 +148,11 @@ const App: React.FC = () => {
     
     const userStatus: Record<string, PunchLog> = {};
     [...logs].sort((a, b) => {
-        const parse = (ts: string) => {
-            const [d, t] = ts.replace(',', '').split(/\s+/);
-            const [dd, mm, yyyy] = d.split('/').map(Number);
-            const [hh, min] = t.split(':').map(Number);
-            return new Date(yyyy, mm - 1, dd, hh, min).getTime();
-        };
-        return parse(a.timestamp) - parse(b.timestamp);
+        const timeA = parseTimestamp(a.timestamp);
+        const timeB = parseTimestamp(b.timestamp);
+        if (timeA !== timeB) return timeA - timeB;
+        if (a.type === 'out' && b.type === 'in') return -1;
+        return 0;
     }).forEach((log: PunchLog) => {
       userStatus[log.employeeName] = log;
     });
@@ -174,15 +195,7 @@ const App: React.FC = () => {
     const userLogs = punchLogs.filter(log => log.employeeName === currentUser.name);
     if (userLogs.length === 0) return false;
     
-    const sorted = [...userLogs].sort((a, b) => {
-        const parse = (ts: string) => {
-            const [d, t] = ts.replace(',', '').split(/\s+/);
-            const [dd, mm, yyyy] = d.split('/').map(Number);
-            const [hh, min] = t.split(':').map(Number);
-            return new Date(yyyy, mm - 1, dd, hh, min).getTime();
-        };
-        return parse(b.timestamp) - parse(a.timestamp);
-    });
+    const sorted = [...userLogs].sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
     
     return sorted[0].type === 'in';
   };
@@ -191,15 +204,7 @@ const App: React.FC = () => {
     setCurrentUser(user);
     const userLogs = punchLogs.filter(log => log.employeeName === user.name);
     
-    const sorted = [...userLogs].sort((a, b) => {
-        const parse = (ts: string) => {
-            const [d, t] = ts.replace(',', '').split(/\s+/);
-            const [dd, mm, yyyy] = d.split('/').map(Number);
-            const [hh, min] = t.split(':').map(Number);
-            return new Date(yyyy, mm - 1, dd, hh, min).getTime();
-        };
-        return parse(b.timestamp) - parse(a.timestamp);
-    });
+    const sorted = [...userLogs].sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
     
     const currentlyIn = sorted.length > 0 && sorted[0].type === 'in';
     const isFreeAccess = ['admin', 'surintendant', 'chargée_de_projet'].includes(user.role);
@@ -318,11 +323,11 @@ const App: React.FC = () => {
     setPunchLogs(prev => {
       const updatedLogs = prev.map(log => {
         if (log.id === sessionInId && modifiedInTime) {
-          const datePart = log.timestamp.split(' ')[0];
+          const datePart = log.timestamp.split(/[ ,]+/)[0];
           return { ...log, timestamp: `${datePart} ${modifiedInTime}:00` };
         }
         if (log.id === sessionOutId && modifiedOutTime) {
-          const datePart = log.timestamp.split(' ')[0];
+          const datePart = log.timestamp.split(/[ ,]+/)[0];
           const newLunchMinutes = lunchMs ? lunchMs / 60000 : log.lunchMinutes;
           return { 
             ...log, 
@@ -372,13 +377,7 @@ const App: React.FC = () => {
       // LOGIQUE D'AUTO-APPROBATION POUR LE TRANSPORT
       if (log.type === 'out') {
         const sortedLogs = [...newLogs].filter(l => l.employeeName === log.employeeName).sort((a,b) => {
-            const parse = (ts: string) => {
-                const [d, t] = ts.replace(',', '').split(/\s+/);
-                const [dd, mm, yyyy] = d.split('/').map(Number);
-                const [hh, min] = t.split(':').map(Number);
-                return new Date(yyyy, mm - 1, dd, hh, min).getTime();
-            };
-            return parse(b.timestamp) - parse(a.timestamp);
+            return parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp);
         });
 
         const correspondingIn = sortedLogs.find(l => l.type === 'in' && parseTimestamp(l.timestamp) < parseTimestamp(log.timestamp));
@@ -387,8 +386,9 @@ const App: React.FC = () => {
           const inMs = parseTimestamp(correspondingIn.timestamp);
           const outMs = parseTimestamp(log.timestamp);
           const duration = outMs - inMs;
-          const dateParts = correspondingIn.timestamp.split(/[ ,]+/)[0].split('/');
-          const isoDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
+          const datePart = correspondingIn.timestamp.split(/[ ,]+/)[0];
+          const dateParts = datePart.split('/');
+          const isoDate = dateParts.length === 3 ? `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}` : datePart;
 
           const autoApproval: ApprovalRecord = {
             id: `AUTO-APP-${Date.now()}`,
@@ -425,8 +425,6 @@ const App: React.FC = () => {
           updateSettingsList('plaques', normalizedValue);
         }
       } else {
-        // Pour les autres rôles (manoeuvres, admins, etc.), on ajoute aux provenances (chantiers)
-        // si la valeur n'est pas "TRANSPORT" ou déjà présente
         if (!settings.provenances.includes(normalizedValue) && normalizedValue !== 'TRANSPORT') {
           updateSettingsList('provenances', normalizedValue);
         }
@@ -435,13 +433,6 @@ const App: React.FC = () => {
     
     const isPunchOnly = currentUser?.permissions.length === 1 && currentUser.permissions[0] === 'punch';
     if (log.type === 'in' && !isPunchOnly) setView('home');
-  };
-
-  const parseTimestamp = (ts: string) => {
-    const [d, t] = ts.replace(',', '').split(/\s+/);
-    const [dd, mm, yyyy] = d.split('/').map(Number);
-    const [hh, min] = t.split(':').map(Number);
-    return new Date(yyyy, mm - 1, dd, hh, min).getTime();
   };
 
   if (view === 'login') return <LoginView users={settings.users} onLogin={handleLogin} />;
@@ -499,7 +490,6 @@ const App: React.FC = () => {
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-              {/* GROUPE 1: TEMPS */}
               {(hasPermission('punch') || hasPermission('approval')) && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 px-2">
@@ -534,7 +524,6 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* GROUPE 2: SOLS */}
               {(hasPermission('envoi') || hasPermission('reception')) && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 px-2">
@@ -574,7 +563,6 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* GROUPE 3: ANALYSE */}
               {(hasPermission('history') || hasPermission('provenance') || hasPermission('reports')) && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 px-2">
@@ -697,8 +685,8 @@ const App: React.FC = () => {
             onPunch={savePunch} 
             onBack={() => setView('home')} 
             currentUser={currentUser} 
-            onAddProject={(p) => updateSettingsList('provenances', p)}
-            onRemoveProject={(p) => removeSettingsOption('provenances', p)}
+            onAddProject={(type, p) => updateSettingsList(type, p)}
+            onRemoveProject={(type, p) => removeSettingsOption(type, p)}
           />
         )}
         {view === 'envoi' && (

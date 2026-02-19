@@ -251,7 +251,7 @@ const ApprovedCompilationView: React.FC<Props> = ({ history, onBack, onDeleteBil
       {/* TEMPLATE D'IMPRESSION (Invisible à l'écran, visible au PDF) */}
       <div className="hidden print:block p-0 bg-white">
         {billetsToPrint.map((b, idx) => (
-          <div key={b.id} className={`${idx > 0 ? 'page-break-before-always' : ''} p-0`}>
+          <div key={b.id} className="p-0 break-after-page mb-0 last:mb-0">
              <BilletPreview data={b} />
           </div>
         ))}
@@ -259,9 +259,9 @@ const ApprovedCompilationView: React.FC<Props> = ({ history, onBack, onDeleteBil
 
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
-          .page-break-before-always {
-            page-break-before: always;
-            break-before: page;
+          .break-after-page {
+            break-after: page;
+            page-break-after: always;
           }
           body {
             background: white !important;
